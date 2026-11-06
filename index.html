@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Vehicle Project Visits</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<style>
+  :root { --bg:#fff; --fg:#1d2733; --muted:#6b7785; --line:#dde3ea; --acc:#1a73e8; --sel:#e8f0fe; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#161b22; --fg:#e6edf3; --muted:#8b98a5; --line:#2d3641; --acc:#58a6ff; --sel:#1f2d44; } }
+  * { box-sizing:border-box } html,body { height:100%; margin:0 }
+  body { font:14px system-ui,sans-serif; background:var(--bg); color:var(--fg); display:flex; flex-direction:column }
+  header { display:flex; flex-wrap:wrap; gap:10px; align-items:center; padding:10px 14px; border-bottom:1px solid var(--line) }
+  header h1 { font-size:16px; margin:0 8px 0 0 }
+  select { padding:6px 8px; border:1px solid var(--line); border-radius:6px; background:var(--bg); color:var(--fg) }
+  .kpi { margin-left:auto; color:var(--muted) } .kpi b { color:var(--fg) }
+  main { flex:1; display:flex; min-height:0 }
+  aside { width:300px; overflow:auto; border-right:1px solid var(--line) }
+  aside h2 { font-size:12px; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); margin:12px 14px 4px }
+  .row { display:flex; justify-content:space-between; padding:7px 14px; cursor:pointer; border-bottom:1px solid var(--line) }
+  .row:hover { background:var(--sel) } .row.on { background:var(--sel); font-weight:600; box-shadow:inset 3px 0 var(--acc) }
+  .row span:last-child { color:var(--muted) }
+  #map { flex:1 }
+  .cnt { background:var(--acc); color:#fff; border-radius:12px; min-width:24px; height:24px; line-height:24px; text-align:center; font-weight:700; border:2px solid #fff }
+  .cnt.zero { background:#9aa5b1 }
+  table.pop { border-collapse:collapse } table.pop td { padding:2px 8px 2px 0 }
+  @media (max-width:700px) { main { flex-direction:column } aside { width:100%; max-height:35% } }
+</style>
+</head>
+<body>
+<header>
+  <h1>Vehicle Project Visits</h1>
+  <select id="fVeh"></select><select id="fMonth"></select><select id="fDev"></select>
+  <div class="kpi" id="kpi">Loading…</div>
+</header>
+<main>
+  <aside><h2>Vehicles (click)</h2><div id="vList"></div><h2>Project sites</h2><div id="sList"></div></aside>
+  <div id="map"></div>
+</main>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script>
+const map = L.map('map').setView([3.14, 101.69], 11);
+L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '© OpenStreetMap' }).addTo(map);
+const layer = L.layerGroup().addTo(map);
+const $ = id => document.getElementById(id);
+const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const hrs = m => (m / 60).toFixed(1) + ' h';
+let D, first = true, siteLayers = {};
+
+fetch('data.json?_=' + Date.now()).then(r => r.json()).then(d => { D = d; init(); })
+  .catch(() => { $('kpi').textContent = 'Could not load data.json'; });
+
+function fill(sel, label, vals) {
+  sel.innerHTML = `<option value="">${label}</option>` + vals.map(v => `<option>${esc(v)}</option>`).join('');
+}
+function init() {
+  const u = k => [...new Set(D.visits.map(v => v[k]))].sort();
+  fill($('fVeh'), 'All vehicles', u('v')); fill($('fMonth'), 'All months', u('m').reverse()); fill($('fDev'), 'All devices', u('d'));
+  ['fVeh', 'fMonth', 'fDev'].forEach(id => $(id).onchange = () => render(id === 'fVeh'));
+  render(true);
+}
+function render(refit) {
+  const fv = $('fVeh').value, fm = $('fMonth').value, fd = $('fDev').value;
+  const vis = D.visits.filter(v => (!fv || v.v === fv) && (!fm || v.m === fm) && (!fd || v.d === fd));
+  const by = {}, veh = {};
+  vis.forEach(v => {
+    (by[v.p] ??= { n: 0, t: 0, veh: {}, last: '' });
+    const s = by[v.p]; s.n++; s.t += v.t; s.veh[v.v] = (s.veh[v.v] || 0) + 1; if (v.e > s.last) s.last = v.e;
+    veh[v.v] = (veh[v.v] || 0) + 1;
+  });
+  $('kpi').innerHTML = `<b>${vis.length}</b> visits · <b>${hrs(vis.reduce((a, v) => a + v.t, 0))}</b> on site · updated ${esc(D.updated)}`;
+
+  layer.clearLayers(); siteLayers = {};
+  const pts = [];
+  D.sites.forEach(s => {
+    const a = by[s.code], n = a ? a.n : 0;
+    if (fv && !a) { L.circle([s.lat, s.lon], { radius: s.r, color: '#9aa5b1', weight: 1, fillOpacity: .05 }).addTo(layer); }
+    else if (!fv || a) {
+      L.circle([s.lat, s.lon], { radius: s.r, color: '#1a73e8', weight: 1.5, fillOpacity: .12 }).addTo(layer);
+    }
+    const rows = a ? Object.entries(a.veh).sort((x, y) => y[1] - x[1]).slice(0, 12)
+      .map(([k, c]) => `<tr><td>${esc(k)}</td><td><b>${c}</b> visits</td></tr>`).join('') : '';
+    const m = L.marker([s.lat, s.lon], { icon: L.divIcon({ className: '', html: `<div class="cnt ${n ? '' : 'zero'}">${n}</div>`, iconSize: [28, 28] }) })
+      .bindPopup(`<b>${esc(s.name || s.code)}</b><br>${n} visits · ${hrs(a ? a.t : 0)} total` +
+        (a ? `<br>Last: ${esc(a.last)}<table class="pop">${rows}</table>` : '')).addTo(layer);
+    siteLayers[s.code] = m;
+    if (n || !fv) pts.push([s.lat, s.lon]);
+  });
+  if (refit && pts.length) map.fitBounds(pts, { padding: [50, 50], maxZoom: 15 });
+  else if (first && pts.length) map.fitBounds(pts, { padding: [50, 50], maxZoom: 15 });
+  first = false;
+
+  $('vList').innerHTML = Object.entries(veh).sort((a, b) => b[1] - a[1]).map(([k, c]) =>
+    `<div class="row ${k === fv ? 'on' : ''}" data-v="${esc(k)}"><span>${esc(k)}</span><span>${c} visits</span></div>`).join('') || '<div class="row">No data</div>';
+  $('vList').querySelectorAll('.row[data-v]').forEach(r => r.onclick = () => {
+    $('fVeh').value = $('fVeh').value === r.dataset.v ? '' : r.dataset.v; render(true);
+  });
+  $('sList').innerHTML = D.sites.map(s => [s, by[s.code] ? by[s.code].n : 0]).filter(x => !fv || x[1]).sort((a, b) => b[1] - a[1]).map(([s, n]) =>
+    `<div class="row" data-s="${esc(s.code)}"><span>${esc(s.name || s.code)}</span><span>${n}</span></div>`).join('');
+  $('sList').querySelectorAll('.row').forEach(r => r.onclick = () => {
+    const m = siteLayers[r.dataset.s]; map.setView(m.getLatLng(), 15); m.openPopup();
+  });
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,6 @@
+# private - never publish
+lark.env
+inbox/
+logs/
+*.xlsx
+__pycache__/
